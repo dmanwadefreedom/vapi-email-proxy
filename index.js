@@ -1,7 +1,7 @@
 const http = require('http');
 const https = require('https');
 
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbza2hg_PGQSA94OkNakn3GdBo0eL8f9x2Z7rma0Q6DFtxoz99NsaTcoSTTQBXAwRWpwvw/exec';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxE0SDGb_VsvG_L-dwTKTsukybaNvdshvd1DyZYVlj0AuHu3mKhzNQtACxPVSINBj3nQw/exec';
 
 const server = http.createServer((req, res) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} from ${req.headers['user-agent'] || 'unknown'}`);
