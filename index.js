@@ -4,6 +4,8 @@ const https = require('https');
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycby8cMhZhxrOEGIsGaN9a2CZghCRENn3D-hQ-ON28TQKAe725dS2DSnoMTNG-gixdBUqmQ/exec';
 
 const server = http.createServer((req, res) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} from ${req.headers['user-agent'] || 'unknown'}`);
+  
   if (req.method === 'GET') {
     res.writeHead(200, {'Content-Type': 'application/json'});
     res.end(JSON.stringify({status: 'ok', message: 'VAPI email proxy is live'}));
@@ -13,7 +15,8 @@ const server = http.createServer((req, res) => {
   let body = '';
   req.on('data', chunk => body += chunk);
   req.on('end', () => {
-    // POST to Apps Script
+    console.log(`[${new Date().toISOString()}] POST body: ${body.substring(0, 300)}`);
+    
     const url = new URL(APPS_SCRIPT_URL);
     const options = {
       hostname: url.hostname,
@@ -23,29 +26,33 @@ const server = http.createServer((req, res) => {
     };
     
     const proxyReq = https.request(options, (proxyRes) => {
-      // Follow 302 redirect
+      console.log(`[${new Date().toISOString()}] Apps Script response: ${proxyRes.statusCode}`);
+      
       if (proxyRes.statusCode === 302 && proxyRes.headers.location) {
+        console.log(`[${new Date().toISOString()}] Following redirect...`);
         const redirectUrl = new URL(proxyRes.headers.location);
-        const getOpts = {
+        https.get({
           hostname: redirectUrl.hostname,
           path: redirectUrl.pathname + redirectUrl.search,
           method: 'GET'
-        };
-        https.get(getOpts, (finalRes) => {
+        }, (finalRes) => {
           let data = '';
           finalRes.on('data', chunk => data += chunk);
           finalRes.on('end', () => {
+            console.log(`[${new Date().toISOString()}] Final response: ${data.substring(0, 200)}`);
             res.writeHead(200, {'Content-Type': 'application/json'});
             res.end(data);
           });
         }).on('error', (e) => {
-          res.writeHead(500, {'Content-Type': 'application/json'});
+          console.log(`[${new Date().toISOString()}] Redirect error: ${e.message}`);
+          res.writeHead(200, {'Content-Type': 'application/json'});
           res.end(JSON.stringify({results: [{result: 'Redirect error: ' + e.message}]}));
         });
       } else {
         let data = '';
         proxyRes.on('data', chunk => data += chunk);
         proxyRes.on('end', () => {
+          console.log(`[${new Date().toISOString()}] Direct response: ${data.substring(0, 200)}`);
           res.writeHead(200, {'Content-Type': 'application/json'});
           res.end(data);
         });
@@ -53,7 +60,8 @@ const server = http.createServer((req, res) => {
     });
     
     proxyReq.on('error', (e) => {
-      res.writeHead(500, {'Content-Type': 'application/json'});
+      console.log(`[${new Date().toISOString()}] Proxy error: ${e.message}`);
+      res.writeHead(200, {'Content-Type': 'application/json'});
       res.end(JSON.stringify({results: [{result: 'Proxy error: ' + e.message}]}));
     });
     
