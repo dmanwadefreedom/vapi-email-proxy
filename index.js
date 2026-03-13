@@ -1,83 +1,103 @@
 const http = require('http');
-const https = require('https');
+const nodemailer = require('nodemailer');
 
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbymy-Pr3SfkyuRlRou9MUtU4wWF14WDKk3DvGx5GT6gLmEwRv7wWlfNe59L9Pn5XyBJwQ/exec';
+const GMAIL_USER = process.env.GMAIL_USER || 'dylan@thedylanewing.com';
+const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD;
+const ENROLLMENT_LINK = 'https://dewing.legalshieldassociate.com/legal';
+const IPHONE_APP = 'https://apps.apple.com/us/app/legalshield-law-firms-on-call/id924247236';
+const ANDROID_APP = 'https://play.google.com/store/apps/details?id=com.legalshield.lsapp';
+
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: GMAIL_USER,
+    pass: GMAIL_APP_PASSWORD
+  }
+});
+
+function buildEmailHtml(name) {
+  return `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#333;">
+    <p style="font-size:16px;">Hey ${name},</p>
+    <p style="font-size:16px;">Great chatting with you just now.</p>
+    <p style="font-size:16px;">Here is your enrollment link to get set up with LegalShield:</p>
+    <p style="text-align:center;margin:24px 0;">
+      <a href="${ENROLLMENT_LINK}" style="background:#1a73e8;color:white;padding:14px 28px;text-decoration:none;border-radius:6px;font-size:16px;font-weight:bold;">Get Protected Now</a>
+    </p>
+    <p style="font-size:16px;">After you enroll, download the app:</p>
+    <p style="font-size:14px;">
+      <a href="${IPHONE_APP}">iPhone App</a> | <a href="${ANDROID_APP}">Android App</a>
+    </p>
+    <p style="font-size:16px;">Questions? Just reply to this email.</p>
+    <p style="font-size:16px;">Talk soon,<br><strong>Dylan Ewing</strong><br>Independent LegalShield Associate</p>
+    <hr style="margin-top:30px;border:none;border-top:1px solid #ddd;">
+    <p style="font-size:11px;color:#999;">Dylan Ewing | Wilmington, DE 19801<br>To unsubscribe, reply "unsubscribe" to this email.</p>
+  </div>`;
+}
 
 const server = http.createServer((req, res) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} from ${req.headers['user-agent'] || 'unknown'}`);
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
 
   if (req.method === 'GET') {
-    res.writeHead(200, {'Content-Type': 'application/json'});
-    res.end(JSON.stringify({status: 'ok', message: 'VAPI email proxy is live'}));
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', message: 'VAPI email proxy is live', sender: GMAIL_USER }));
     return;
   }
 
   let body = '';
   req.on('data', chunk => body += chunk);
-  req.on('end', () => {
-    console.log(`[${new Date().toISOString()}] POST body: ${body.substring(0, 500)}`);
-
-    // Parse the incoming request to extract email for logging
-    let emailTo = 'unknown';
+  req.on('end', async () => {
     try {
       const parsed = JSON.parse(body);
-      const tc = parsed.message && parsed.message.toolCalls && parsed.message.toolCalls[0];
-      if (tc) {
-        const args = typeof tc.function.arguments === 'string' ? JSON.parse(tc.function.arguments) : tc.function.arguments;
-        emailTo = args.email || 'unknown';
-      }
-    } catch(e) {}
 
-    // Respond to VAPI IMMEDIATELY — don't wait for Apps Script
-    // This prevents the "No result returned" timeout error
-    res.writeHead(200, {'Content-Type': 'application/json'});
-    res.end(JSON.stringify({results: [{result: 'Email sent successfully to ' + emailTo}]}));
-    console.log(`[${new Date().toISOString()}] Responded to VAPI immediately for ${emailTo}`);
-
-    // Now fire the email in the background
-    const url = new URL(APPS_SCRIPT_URL);
-    const options = {
-      hostname: url.hostname,
-      path: url.pathname + url.search,
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'}
-    };
-
-    const proxyReq = https.request(options, (proxyRes) => {
-      console.log(`[${new Date().toISOString()}] Apps Script response: ${proxyRes.statusCode}`);
-
-      if (proxyRes.statusCode === 302 && proxyRes.headers.location) {
-        console.log(`[${new Date().toISOString()}] Following redirect...`);
-        const redirectUrl = new URL(proxyRes.headers.location);
-        https.get({
-          hostname: redirectUrl.hostname,
-          path: redirectUrl.pathname + redirectUrl.search
-        }, (finalRes) => {
-          let data = '';
-          finalRes.on('data', chunk => data += chunk);
-          finalRes.on('end', () => {
-            console.log(`[${new Date().toISOString()}] Background email result: ${data.substring(0, 200)}`);
-          });
-        }).on('error', (e) => {
-          console.log(`[${new Date().toISOString()}] Redirect error: ${e.message}`);
-        });
+      // Handle both VAPI tool call format AND direct {email, name} format
+      let email, name;
+      if (parsed.message && parsed.message.toolCalls) {
+        const tc = parsed.message.toolCalls[0];
+        const args = typeof tc.function.arguments === 'string'
+          ? JSON.parse(tc.function.arguments)
+          : tc.function.arguments;
+        email = args.email;
+        name = args.name || 'there';
       } else {
-        let data = '';
-        proxyRes.on('data', chunk => data += chunk);
-        proxyRes.on('end', () => {
-          console.log(`[${new Date().toISOString()}] Background direct response: ${data.substring(0, 200)}`);
-        });
+        email = parsed.email;
+        name = parsed.name || 'there';
       }
-    });
 
-    proxyReq.on('error', (e) => {
-      console.log(`[${new Date().toISOString()}] Background proxy error: ${e.message}`);
-    });
+      if (!email) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'No email provided' }));
+        return;
+      }
 
-    proxyReq.write(body);
-    proxyReq.end();
+      console.log(`[${new Date().toISOString()}] Sending email to ${email} (${name})`);
+
+      // Send email
+      const info = await transporter.sendMail({
+        from: `"Dylan Ewing" <${GMAIL_USER}>`,
+        to: email,
+        subject: `${name}, here is your LegalShield enrollment link`,
+        text: `Hey ${name},\n\nGreat chatting with you. Here is your enrollment link:\n${ENROLLMENT_LINK}\n\niPhone App: ${IPHONE_APP}\nAndroid App: ${ANDROID_APP}\n\nQuestions? Just reply.\n\nDylan Ewing\nIndependent LegalShield Associate`,
+        html: buildEmailHtml(name)
+      });
+
+      console.log(`[${new Date().toISOString()}] Email sent: ${info.messageId}`);
+
+      // Get toolCallId for VAPI response format
+      let toolCallId = 'unknown';
+      try { toolCallId = parsed.message.toolCalls[0].id; } catch(e) {}
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        results: [{ toolCallId, result: `Email sent successfully to ${email}` }]
+      }));
+
+    } catch (err) {
+      console.error(`[${new Date().toISOString()}] Error:`, err.message);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
   });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log('VAPI email proxy running on port ' + PORT));
+server.listen(PORT, () => console.log(`VAPI email proxy running on port ${PORT} — sending from ${GMAIL_USER}`));
