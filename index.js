@@ -9,7 +9,9 @@ const ANDROID_APP = 'https://play.google.com/store/apps/details?id=com.legalshie
 
 function createTransporter() {
   return nodemailer.createTransport({
-    service: 'gmail',
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true,
     auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD },
     connectionTimeout: 10000,
     greetingTimeout: 10000,
