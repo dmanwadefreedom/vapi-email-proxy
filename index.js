@@ -7,13 +7,15 @@ const ENROLLMENT_LINK = 'https://dewing.legalshieldassociate.com/legal';
 const IPHONE_APP = 'https://apps.apple.com/us/app/legalshield-law-firms-on-call/id924247236';
 const ANDROID_APP = 'https://play.google.com/store/apps/details?id=com.legalshield.lsapp';
 
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: GMAIL_USER,
-    pass: GMAIL_APP_PASSWORD
-  }
-});
+function createTransporter() {
+  return nodemailer.createTransport({
+    service: 'gmail',
+    auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD },
+    connectionTimeout: 10000,
+    greetingTimeout: 10000,
+    socketTimeout: 10000
+  });
+}
 
 function buildEmailHtml(name) {
   return `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#333;">
@@ -34,12 +36,29 @@ function buildEmailHtml(name) {
   </div>`;
 }
 
+async function sendEmail(email, name) {
+  const transporter = createTransporter();
+  try {
+    const info = await transporter.sendMail({
+      from: `"Dylan Ewing" <${GMAIL_USER}>`,
+      to: email,
+      subject: `${name}, here is your LegalShield enrollment link`,
+      text: `Hey ${name},\n\nGreat chatting with you. Here is your enrollment link:\n${ENROLLMENT_LINK}\n\niPhone App: ${IPHONE_APP}\nAndroid App: ${ANDROID_APP}\n\nQuestions? Just reply.\n\nDylan Ewing\nIndependent LegalShield Associate`,
+      html: buildEmailHtml(name)
+    });
+    console.log(`[${new Date().toISOString()}] Email sent: ${info.messageId}`);
+    return info;
+  } finally {
+    transporter.close();
+  }
+}
+
 const server = http.createServer((req, res) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
 
   if (req.method === 'GET') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', message: 'VAPI email proxy is live', sender: GMAIL_USER }));
+    res.end(JSON.stringify({ status: 'ok', message: 'VAPI email proxy is live', sender: GMAIL_USER, password_set: !!GMAIL_APP_PASSWORD }));
     return;
   }
 
@@ -48,44 +67,40 @@ const server = http.createServer((req, res) => {
   req.on('end', async () => {
     try {
       const parsed = JSON.parse(body);
+      console.log(`[${new Date().toISOString()}] Payload keys: ${Object.keys(parsed).join(', ')}`);
 
       // Handle both VAPI tool call format AND direct {email, name} format
-      let email, name;
+      let email, name, toolCallId = 'unknown';
       if (parsed.message && parsed.message.toolCalls) {
         const tc = parsed.message.toolCalls[0];
+        toolCallId = tc.id || 'unknown';
         const args = typeof tc.function.arguments === 'string'
           ? JSON.parse(tc.function.arguments)
           : tc.function.arguments;
         email = args.email;
         name = args.name || 'there';
+        console.log(`[${new Date().toISOString()}] VAPI format — toolCallId: ${toolCallId}`);
       } else {
         email = parsed.email;
         name = parsed.name || 'there';
+        console.log(`[${new Date().toISOString()}] Direct format`);
       }
 
       if (!email) {
+        console.log(`[${new Date().toISOString()}] No email in payload`);
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'No email provided' }));
+        res.end(JSON.stringify({ results: [{ toolCallId, result: 'Error: No email provided' }] }));
         return;
       }
 
-      console.log(`[${new Date().toISOString()}] Sending email to ${email} (${name})`);
+      console.log(`[${new Date().toISOString()}] Sending to ${email} (${name})`);
 
-      // Send email
-      const info = await transporter.sendMail({
-        from: `"Dylan Ewing" <${GMAIL_USER}>`,
-        to: email,
-        subject: `${name}, here is your LegalShield enrollment link`,
-        text: `Hey ${name},\n\nGreat chatting with you. Here is your enrollment link:\n${ENROLLMENT_LINK}\n\niPhone App: ${IPHONE_APP}\nAndroid App: ${ANDROID_APP}\n\nQuestions? Just reply.\n\nDylan Ewing\nIndependent LegalShield Associate`,
-        html: buildEmailHtml(name)
-      });
+      // Send with 15s timeout
+      const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('Email send timeout')), 15000));
+      const send = sendEmail(email, name);
+      await Promise.race([send, timeout]);
 
-      console.log(`[${new Date().toISOString()}] Email sent: ${info.messageId}`);
-
-      // Get toolCallId for VAPI response format
-      let toolCallId = 'unknown';
-      try { toolCallId = parsed.message.toolCalls[0].id; } catch(e) {}
-
+      console.log(`[${new Date().toISOString()}] Success!`);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         results: [{ toolCallId, result: `Email sent successfully to ${email}` }]
@@ -93,11 +108,17 @@ const server = http.createServer((req, res) => {
 
     } catch (err) {
       console.error(`[${new Date().toISOString()}] Error:`, err.message);
-      res.writeHead(500, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: err.message }));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        results: [{ toolCallId: 'unknown', result: `Email failed: ${err.message}. Ask the lead to check their email later or give them the link directly: ${ENROLLMENT_LINK}` }]
+      }));
     }
   });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`VAPI email proxy running on port ${PORT} — sending from ${GMAIL_USER}`));
+server.listen(PORT, () => {
+  console.log(`VAPI email proxy running on port ${PORT}`);
+  console.log(`Sender: ${GMAIL_USER}`);
+  console.log(`Password set: ${!!GMAIL_APP_PASSWORD}`);
+});
